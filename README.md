@@ -1,54 +1,60 @@
-# HH.ru Python Vacancy Scraper and Telegram Bot
+# HH.kz Python Job Vacancy Scraper and Telegram Bot
 
-This project consists of a web scraper for hh.ru (HeadHunter) that collects Python job vacancies and a Telegram bot that allows users to search and receive updates about these vacancies.
+This project provides a system for scraping Python job vacancies from hh.kz and making them accessible through a Telegram bot. The application consists of a web scraper, database manager, and Telegram bot, all working together to deliver real-time job vacancy notifications and search capabilities.
 
 ## Features
 
-### Web Scraper
-- Scrapes Python job vacancies from hh.ru
-- Extracts vacancy title, company name, link, and skills
-- Saves all vacancies to JSON files with timestamps
-- Identifies and separately saves new and existing vacancies
-- Automatically updates at specified intervals (default: 10 minutes)
-- Handles pagination to collect all available vacancies
+- 🔍 **Web Scraper**: Scrapes Python job vacancies from hh.kz, extracting detailed information including:
+  - Job title and company
+  - Salary information
+  - Required experience
+  - Location
+  - Required skills
+  - Publication date
+  
+- 💾 **Database Management**:
+  - Stores all vacancies in a SQLite database
+  - Tracks new and updated vacancies
+  - Manages user subscriptions for notifications
+  - Records which notifications have been sent to users
+  
+- 🤖 **Telegram Bot**:
+  - `/start` - Introduction to the bot and available commands
+  - `/help` - Detailed help on using the bot
+  - `/find [query]` - Search for vacancies containing specific terms
+  - `/search [keyword]` - Search for vacancies with specific keywords in title or skills
+  - `/latest` - Show the latest 5 vacancies
+  - `/update` - Manually trigger a vacancy database update
+  - `/subscribe` - Subscribe to receive notifications about new vacancies
+  - `/unsubscribe` - Stop receiving notifications
+  - `/stats` - Show detailed database statistics
 
-### SQLite Database
-- Stores all vacancy information in a SQLite database
-- Provides CRUD operations for vacancy data
-- Enables efficient searching and retrieval of vacancies
-
-### Telegram Bot
-- Allows users to search for vacancies using the `/find` command
-- Shows the latest 5 vacancies with the `/latest` command
-- Manually updates the vacancy database with the `/update` command
-- Displays database statistics with the `/stats` command
-- Automatically updates the database every 10 minutes
-- Notifies users about new vacancies
-
-## Requirements
-
-- Python 3.6+
-- Required packages (see requirements.txt):
-  - requests
-  - beautifulsoup4
-  - lxml
-  - aiogram
-  - schedule
-  - asyncio
-  - python-dotenv
+- 📊 **Statistics and Analysis**:
+  - Track most common companies hiring Python developers
+  - Track most demanded skills in Python job listings
+  - Monitor total vacancy counts and trends
 
 ## Installation
 
-1. Make sure you have Python 3.6 or higher installed
-2. Install the required packages:
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/your-username/hh-python-scraper.git
+   cd hh-python-scraper
+   ```
 
-```bash
-pip install -r requirements.txt
-```
+2. Install the required packages:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. Set up your Telegram bot:
+   - Create a new bot using BotFather on Telegram
+   - Get your bot token
+   - Update the `BOT_TOKEN` variable in `telegram_bot.py`
 
 ## Usage
 
-### Running the Full Application
+### Running the complete system
 
 To run both the scraper and Telegram bot:
 
@@ -56,42 +62,63 @@ To run both the scraper and Telegram bot:
 python main.py
 ```
 
-This will:
-1. Start the Telegram bot
-2. Run an initial scraping to populate the database
-3. Schedule automatic updates every 10 minutes
+### Command-line options
 
-### Telegram Bot Commands
+The application supports various command-line options:
 
-- `/start` - Get information about the bot and available commands
-- `/find Python` - Search for Python vacancies (you can add more keywords, e.g., `/find Python Django`)
-- `/latest` - Show the 5 most recently added vacancies
-- `/update` - Manually trigger a database update
-- `/stats` - Show database statistics
+```bash
+python main.py --help
+```
+
+Options:
+- `--search TEXT` - Specify the search query (default: "Python")
+- `--pages NUMBER` - Number of pages to scrape (default: 3)
+- `--interval SECONDS` - Interval between scraping runs in seconds (default: 600)
+- `--scraper-only` - Run only the scraper without the bot
+- `--bot-only` - Run only the bot without the scraper
+
+Examples:
+```bash
+# Run with custom search query
+python main.py --search "Python Django"
+
+# Run only the Telegram bot
+python main.py --bot-only
+
+# Run only the scraper with custom settings
+python main.py --scraper-only --pages 5 --interval 1800
+```
 
 ## Project Structure
 
-- `web_hh_scrapping.py` - The web scraper for hh.ru
-- `db_manager.py` - SQLite database manager
-- `telegram_bot.py` - Telegram bot implementation
-- `main.py` - Main entry point for the application
-- `requirements.txt` - List of required packages
-- `vacancies/` - Directory for JSON files with scraped vacancies
-- `vacancies.db` - SQLite database file
+- `main.py` - Main entry point to run the complete system
+- `web_hh_scrapping.py` - Web scraper for hh.kz
+- `db_manager.py` - Database operations and management
+- `telegram_bot.py` - Telegram bot implementation with commands
+- `requirements.txt` - Required Python packages
+- `data/` - Directory for storing JSON files and database
+- `logs/` - Directory for log files
 
-## Customization
+## Telegram Bot Commands
 
-You can modify the project to:
+The Telegram bot supports the following commands:
 
-- Change the search query (default: "Python")
-- Change the region (default: "160" for Almaty)
-- Adjust the update interval (default: 600 seconds)
-- Modify the maximum number of pages to scrape (default: 20)
-- Change the Telegram bot token
+| Command | Description |
+|---------|-------------|
+| `/start` | Start the bot and get an introduction |
+| `/help` | Display detailed help on using the bot |
+| `/find [query]` | Search for vacancies containing the specified query |
+| `/search [keyword]` | Search for vacancies with a specific keyword in title or skills |
+| `/latest` | Show the 5 most recently added vacancies |
+| `/update` | Manually trigger an update to fetch new vacancies |
+| `/subscribe` | Subscribe to receive notifications about new vacancies |
+| `/unsubscribe` | Unsubscribe from vacancy notifications |
+| `/stats` | Show detailed statistics about the vacancy database |
 
-## Notes
+## Contributions
 
-- The scraper uses a delay between page requests to avoid overloading the server
-- The bot runs updates in a separate thread to avoid blocking the main thread
-- The database is automatically created if it doesn't exist
-- All errors are logged to the console and a log file 
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details. 
