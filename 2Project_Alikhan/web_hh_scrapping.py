@@ -5,228 +5,315 @@ import time
 import os
 import logging
 from datetime import datetime
+import re
+from typing import List, Dict, Tuple, Any, Optional
 
-# Настройка логирования
-logging.basicConfig(filename='app.log', level=logging.INFO, 
-                    format='%(asctime)s - %(levelname)s - %(message)s')
+# Setup logging
+logging.basicConfig(
+    filename='scraper.log',
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 class HHScraper:
-    def __init__(self, search_query="Python", region="160"):  # 160 is for Almaty
+    def __init__(self, search_query: str, pages_to_scrape: int = 3, update_interval: int = 600):
+        """
+        Initialize the scraper with the search query and configuration.
+        
+        Args:
+            search_query: The search term to look for vacancies
+            pages_to_scrape: Number of pages to scrape (default: 3)
+            update_interval: Time between updates in seconds (default: 600 = 10 minutes)
+        """
         self.search_query = search_query
-        self.region = region
+        self.pages_to_scrape = pages_to_scrape
+        self.update_interval = update_interval
         self.base_url = "https://hh.kz/search/vacancy"
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
-            'Accept': '*/*'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
-        self.all_vacancies = []
-        self.new_vacancies = []
-        self.old_vacancies = []
+        self.output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+        self.all_vacancies_file = os.path.join(self.output_dir, "all_vacancies.json")
         
         # Create output directory if it doesn't exist
-        self.output_dir = "vacancies"
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
-            
-        logging.info(f"Инициализирован скрапер для поиска '{search_query}' в регионе {region}")
+            logging.info(f"Created output directory: {self.output_dir}")
 
-    def get_page(self, page=0):
-        """Get HTML content of a specific page"""
-        params = {
-            "text": self.search_query,
-            "area": self.region,
-            "page": page
-        }
+    def fetch_html(self, url: str, params: Dict = None) -> str:
+        """
+        Fetch HTML content from the URL.
         
+        Args:
+            url: The URL to fetch
+            params: Query parameters to include in the request
+            
+        Returns:
+            HTML content as a string
+        """
         try:
-            response = requests.get(self.base_url, headers=self.headers, params=params)
+            response = requests.get(url, headers=self.headers, params=params)
             response.raise_for_status()
-            logging.info(f"Успешно получена страница {page}")
             return response.text
         except requests.exceptions.RequestException as e:
-            logging.error(f"Ошибка при получении страницы {page}: {e}")
-            return None
-            
-    def get_vacancy_details(self, vacancy_url):
-        """Get detailed information about a specific vacancy"""
-        try:
-            response = requests.get(vacancy_url, headers=self.headers)
-            response.raise_for_status()
-            
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # Extract skills
-            skills = []
-            skills_block = soup.find('div', {'class': 'bloko-tag-list'})
-            
-            if skills_block:
-                skill_tags = skills_block.find_all('div', {'class': 'bloko-tag__section'})
-                for tag in skill_tags:
-                    skills.append(tag.text.strip())
-            
-            logging.info(f"Получены детали вакансии: {vacancy_url}, найдено {len(skills)} навыков")
-            return {
-                'skills': skills
-            }
-            
-        except Exception as e:
-            logging.error(f"Ошибка при получении деталей вакансии {vacancy_url}: {e}")
-            return {'skills': []}
+            logging.error(f"Error fetching HTML: {e}")
+            return ""
 
-    def parse_vacancies(self, html):
-        """Parse HTML to extract vacancy information"""
-        if not html:
-            return []
+    def parse_vacancies(self, html: str) -> List[Dict]:
+        """
+        Parse the HTML to extract vacancy information.
         
+        Args:
+            html: HTML content to parse
+            
+        Returns:
+            List of vacancy dictionaries
+        """
+        vacancies = []
         soup = BeautifulSoup(html, 'html.parser')
-        vacancies_found = []
         
-        # Find all vacancy items
-        vacancy_items = soup.find_all('div', {'class': 'vacancy-serp-item__layout'})
-        logging.info(f"Найдено {len(vacancy_items)} вакансий на странице")
+        # Find all vacancy blocks
+        vacancy_blocks = soup.find_all('div', {'class': 'vacancy-serp-item-body'})
         
-        for item in vacancy_items:
+        for block in vacancy_blocks:
             try:
-                # Extract vacancy title and link
-                title_element = item.find('a', {'class': 'serp-item__title'})
+                # Extract basic information
+                title_element = block.find('a', {'class': 'serp-item__title'})
                 if not title_element:
                     continue
-                    
+                
                 title = title_element.text.strip()
                 link = title_element['href'].split('?')[0]  # Remove query parameters
                 
                 # Extract company name
-                company_element = item.find('div', {'class': 'vacancy-serp-item__meta-info-company'})
-                company = company_element.text.strip() if company_element else "Unknown company"
+                company_element = block.find('a', {'data-qa': 'vacancy-serp__vacancy-employer'})
+                company = company_element.text.strip() if company_element else "Company not specified"
                 
-                # Create vacancy object
+                # Extract skills if available
+                skills = []
+                skills_block = block.find('div', {'data-qa': 'vacancy-serp__vacancy_snippet_requirement'})
+                if skills_block:
+                    skills_text = skills_block.text.strip()
+                    # Extract skills separated by commas, semicolons, or dots
+                    skills = [skill.strip() for skill in re.split(r'[,;.]', skills_text) if skill.strip()]
+                
+                # Extract salary information
+                salary = "Not specified"
+                salary_element = block.find('span', {'data-qa': 'vacancy-serp__vacancy-compensation'})
+                if salary_element:
+                    salary = salary_element.text.strip()
+                
+                # Extract experience requirements
+                experience = "Not specified"
+                exp_element = block.find('div', {'data-qa': 'vacancy-serp__vacancy_snippet_requirement'})
+                if exp_element:
+                    exp_text = exp_element.text.lower()
+                    # Look for experience patterns like "1-3 years", "from 3 years", etc.
+                    exp_patterns = [
+                        r'(\d+[-–]\d+\s+(?:year|years|год|года|лет))',
+                        r'(от\s+\d+\s+(?:year|years|год|года|лет))',
+                        r'(experience\s+\d+[-–]?\d*\s+(?:year|years|год|года|лет))',
+                        r'(опыт\s+\d+[-–]?\d*\s+(?:year|years|год|года|лет))'
+                    ]
+                    for pattern in exp_patterns:
+                        match = re.search(pattern, exp_text, re.IGNORECASE)
+                        if match:
+                            experience = match.group(1)
+                            break
+                
+                # Extract location
+                location = "Not specified"
+                location_element = block.find('div', {'data-qa': 'vacancy-serp__vacancy-address'})
+                if location_element:
+                    location = location_element.text.strip()
+                
+                # Extract publication date
+                publication_date = "Not specified"
+                date_element = block.find('span', {'data-qa': 'vacancy-serp__vacancy-date'})
+                if date_element:
+                    publication_date = date_element.text.strip()
+                
+                # Create vacancy object with unique ID (constructed from link)
+                vacancy_id = link.split('/')[-1]
+                
                 vacancy = {
-                    "title": title,
-                    "company": company,
-                    "link": link,
-                    "id": link.split('/')[-1]  # Extract vacancy ID from link
+                    'id': vacancy_id,
+                    'title': title,
+                    'company': company,
+                    'skills': skills,
+                    'link': link,
+                    'salary': salary,
+                    'experience': experience,
+                    'location': location,
+                    'publication_date': publication_date,
+                    'created_at': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
                 
-                # Get detailed information including skills
-                details = self.get_vacancy_details(link)
-                vacancy.update(details)
+                vacancies.append(vacancy)
                 
-                vacancies_found.append(vacancy)
             except Exception as e:
-                logging.error(f"Ошибка при парсинге вакансии: {e}")
+                logging.error(f"Error parsing vacancy: {e}")
                 continue
-                
-        return vacancies_found
         
-    def scrape_all_pages(self, max_pages=20):
-        """Scrape multiple pages of search results"""
-        all_vacancies = []
-        
-        for page in range(max_pages):
-            logging.info(f"Скрапинг страницы {page}...")
-            html = self.get_page(page)
-            
-            if not html:
-                logging.warning(f"Не удалось получить страницу {page}, прерывание")
-                break
-                
-            vacancies = self.parse_vacancies(html)
-            
-            if not vacancies:
-                logging.info(f"Нет вакансий на странице {page}, прерывание")
-                break
-                
-            all_vacancies.extend(vacancies)
-            
-            # Check if we've reached the last page
-            soup = BeautifulSoup(html, 'html.parser')
-            if not soup.find('a', {'data-qa': 'pager-next'}):
-                logging.info("Достигнута последняя страница")
-                break
-                
-            # Be nice to the server
-            time.sleep(1)
-            
-        logging.info(f"Всего найдено {len(all_vacancies)} вакансий")
-        return all_vacancies
+        return vacancies
 
-    def identify_new_vacancies(self, current_vacancies):
-        """Identify new vacancies by comparing with previous results"""
-        if not self.all_vacancies:
-            logging.info("Первый запуск, все вакансии считаются новыми")
-            return current_vacancies, []
+    def save_to_json(self, data: List[Dict], filename: str) -> str:
+        """
+        Save data to a JSON file.
+        
+        Args:
+            data: The data to save
+            filename: The filename to save to
             
-        # Get IDs of existing vacancies
-        existing_ids = {v["id"] for v in self.all_vacancies}
-        
-        # Separate new and old vacancies
-        new_vacancies = [v for v in current_vacancies if v["id"] not in existing_ids]
-        old_vacancies = [v for v in current_vacancies if v["id"] in existing_ids]
-        
-        logging.info(f"Найдено {len(new_vacancies)} новых и {len(old_vacancies)} старых вакансий")
-        return new_vacancies, old_vacancies
-        
-    def save_to_json(self, vacancies, filename):
-        """Save vacancies to a JSON file"""
+        Returns:
+            The full path to the saved file
+        """
         filepath = os.path.join(self.output_dir, filename)
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(vacancies, f, ensure_ascii=False, indent=2)
-        logging.info(f"Сохранено {len(vacancies)} вакансий в файл {filepath}")
-
-    def run(self, interval=600):
-        """Run the scraper at specified intervals"""
         try:
-            while True:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                logging.info(f"Начало скрапинга в {timestamp}")
-                
-                # Scrape all pages
-                current_vacancies = self.scrape_all_pages()
-                
-                # Identify new and old vacancies
-                self.new_vacancies, self.old_vacancies = self.identify_new_vacancies(current_vacancies)
-                
-                # Save all current vacancies
-                self.save_to_json(current_vacancies, f"all_vacancies_{timestamp}.json")
-                
-                # Save new vacancies if any
-                if self.new_vacancies:
-                    self.save_to_json(self.new_vacancies, f"new_vacancies_{timestamp}.json")
-                
-                # Save old vacancies if any
-                if self.old_vacancies:
-                    self.save_to_json(self.old_vacancies, f"old_vacancies_{timestamp}.json")
-                
-                # Update all vacancies list
-                self.all_vacancies = current_vacancies
-                
-                logging.info(f"Найдено {len(current_vacancies)} вакансий всего")
-                logging.info(f"Новых вакансий: {len(self.new_vacancies)}")
-                logging.info(f"Старых вакансий: {len(self.old_vacancies)}")
-                logging.info(f"Ожидание {interval} секунд до следующего обновления...")
-                
-                time.sleep(interval)
-                
-        except KeyboardInterrupt:
-            logging.info("Скрапинг остановлен пользователем")
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            logging.info(f"Saved data to {filepath}")
+            return filepath
         except Exception as e:
-            logging.error(f"Ошибка в скрапере: {e}")
+            logging.error(f"Error saving to JSON: {e}")
+            return ""
 
-    def run_once(self):
-        """Run the scraper once and return the results"""
-        logging.info("Запуск одноразового скрапинга...")
-        current_vacancies = self.scrape_all_pages()
-        self.new_vacancies, self.old_vacancies = self.identify_new_vacancies(current_vacancies)
-        self.all_vacancies = current_vacancies
+    def load_from_json(self, filepath: str) -> List[Dict]:
+        """
+        Load data from a JSON file.
         
-        logging.info(f"Найдено {len(current_vacancies)} вакансий всего")
-        logging.info(f"Новых вакансий: {len(self.new_vacancies)}")
-        logging.info(f"Старых вакансий: {len(self.old_vacancies)}")
+        Args:
+            filepath: Path to the JSON file
+            
+        Returns:
+            The loaded data
+        """
+        try:
+            if os.path.exists(filepath):
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            return []
+        except Exception as e:
+            logging.error(f"Error loading from JSON: {e}")
+            return []
+
+    def filter_new_vacancies(self, all_vacancies: List[Dict], new_vacancies: List[Dict]) -> List[Dict]:
+        """
+        Filter out vacancies that already exist in all_vacancies.
         
-        return current_vacancies, self.new_vacancies, self.old_vacancies
+        Args:
+            all_vacancies: Existing vacancies
+            new_vacancies: New vacancies to filter
+            
+        Returns:
+            Filtered list of new vacancies
+        """
+        existing_ids = {vacancy['id'] for vacancy in all_vacancies}
+        return [vacancy for vacancy in new_vacancies if vacancy['id'] not in existing_ids]
+
+    def run_once(self) -> Tuple[List[Dict], List[Dict], List[Dict], str, Optional[str]]:
+        """
+        Run the scraper once.
+        
+        Returns:
+            Tuple of (all_vacancies, new_vacancies, updated_vacancies, all_vacancies_file, new_vacancies_file)
+        """
+        logging.info(f"Starting scraping run for query: {self.search_query}")
+        all_vacancies = self.load_from_json(self.all_vacancies_file)
+        
+        # Dictionary to track existing vacancy IDs and their indices
+        existing_vacancy_map = {vacancy['id']: idx for idx, vacancy in enumerate(all_vacancies)}
+        
+        # Track new and updated vacancies
+        new_vacancies = []
+        updated_vacancies = []
+        
+        # Scrape each page
+        for page in range(self.pages_to_scrape):
+            params = {
+                'text': self.search_query,
+                'page': page,
+                'items_on_page': 50
+            }
+            
+            html = self.fetch_html(self.base_url, params)
+            if not html:
+                logging.warning(f"No HTML content received for page {page}")
+                continue
+            
+            # Parse vacancies from the page
+            page_vacancies = self.parse_vacancies(html)
+            logging.info(f"Found {len(page_vacancies)} vacancies on page {page}")
+            
+            for vacancy in page_vacancies:
+                vacancy_id = vacancy['id']
+                
+                if vacancy_id in existing_vacancy_map:
+                    # Update existing vacancy
+                    idx = existing_vacancy_map[vacancy_id]
+                    
+                    # Check if the vacancy has new information
+                    existing_vacancy = all_vacancies[idx]
+                    if (vacancy['title'] != existing_vacancy['title'] or
+                        vacancy['company'] != existing_vacancy['company'] or
+                        vacancy['salary'] != existing_vacancy.get('salary', 'Not specified') or
+                        vacancy['experience'] != existing_vacancy.get('experience', 'Not specified') or
+                        vacancy['location'] != existing_vacancy.get('location', 'Not specified') or
+                        vacancy['skills'] != existing_vacancy.get('skills', [])):
+                        
+                        # Keep the original creation timestamp
+                        vacancy['created_at'] = existing_vacancy['created_at']
+                        # Update the vacancy
+                        all_vacancies[idx] = vacancy
+                        updated_vacancies.append(vacancy)
+                else:
+                    # Add as a new vacancy
+                    new_vacancies.append(vacancy)
+                    existing_vacancy_map[vacancy_id] = len(all_vacancies)
+                    all_vacancies.append(vacancy)
+            
+            # Add a small delay between pages to be respectful to the server
+            if page < self.pages_to_scrape - 1:
+                time.sleep(2)
+        
+        # Save all vacancies
+        all_vacancies_file = self.save_to_json(all_vacancies, "all_vacancies.json")
+        
+        # Save new vacancies if there are any
+        new_vacancies_file = None
+        if new_vacancies:
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            new_vacancies_file = self.save_to_json(new_vacancies, f"new_vacancies_{timestamp}.json")
+        
+        # Log results
+        logging.info(f"Scraping completed: {len(all_vacancies)} total, {len(new_vacancies)} new, {len(updated_vacancies)} updated")
+        
+        return all_vacancies, new_vacancies, updated_vacancies, all_vacancies_file, new_vacancies_file
+
+    def run(self):
+        """
+        Run the scraper in a continuous loop.
+        """
+        logging.info(f"Starting continuous scraping every {self.update_interval} seconds")
+        
+        while True:
+            try:
+                # Run once
+                _, new_vacancies, updated_vacancies, _, _ = self.run_once()
+                
+                # Log results
+                logging.info(f"Found {len(new_vacancies)} new vacancies and {len(updated_vacancies)} updated vacancies")
+                
+                # Wait for the next update
+                logging.info(f"Waiting {self.update_interval} seconds until next update")
+                time.sleep(self.update_interval)
+                
+            except Exception as e:
+                logging.error(f"Error in main scraper loop: {e}")
+                # Wait before retrying
+                time.sleep(60)
 
 if __name__ == "__main__":
-    # Create and run the scraper
-    logging.info("Парсер запущен...")
-    scraper = HHScraper(search_query="Python")
-    scraper.run(interval=600)  # Update every 600 seconds (10 minutes) 
+    # Example usage
+    scraper = HHScraper(search_query="Python", pages_to_scrape=3)
+    scraper.run()
